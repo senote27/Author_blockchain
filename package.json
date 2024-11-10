@@ -1,0 +1,45 @@
+{
+    "name": "author-blockchain",
+    "version": "1.0.0",
+    "description": "Blockchain-based marketplace for authors to sell their books",
+    "main": "truffle-config.js",
+    "scripts": {
+      "install:all": "npm install && cd frontend && npm install",
+      "start:dev": "concurrently \"cd frontend && npm run dev\" \"cd backend && python -m uvicorn main:app --reload\"",
+      "test": "truffle test",
+      "compile": "truffle compile",
+      "migrate": "truffle migrate",
+      "migrate:reset": "truffle migrate --reset",
+      "lint": "solhint 'contracts/*.sol'"
+    },
+    "dependencies": {
+      "@openzeppelin/contracts": "^4.9.3",
+      "@truffle/hdwallet-provider": "^2.1.15",
+      "dotenv": "^16.3.1"
+    },
+    "devDependencies": {
+      "concurrently": "^8.2.2",
+      "eth-gas-reporter": "^0.2.27",
+      "solhint": "^3.6.2",
+      "truffle": "^5.11.5",
+      "truffle-plugin-verify": "^0.6.5"
+    },
+    "engines": {
+      "node": ">=16.0.0",
+      "npm": ">=8.0.0"
+    },
+    "repository": {
+      "type": "git",
+      "url": "git+https://github.com/senote27/Author_blockchain.git"
+    },
+    "keywords": [
+      "blockchain",
+      "ethereum",
+      "books",
+      "marketplace",
+      "authors",
+      "web3"
+    ],
+    "author": "senote27",
+    "license": "MIT"
+  }

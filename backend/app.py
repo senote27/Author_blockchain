@@ -1,225 +1,255 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-from sqlalchemy import func
-from typing import List, Optional
-from datetime import datetime, timedelta
-from eth_account.messages import encode_defunct
 from web3 import Web3
-import jwt
-import os
+from eth_account import Account
 from dotenv import load_dotenv
-
-from . import models, schemas, database
+import os
+import models
+import auth
+import json
+from typing import Optional
+from datetime import datetime
+from pathlib import Path
 
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="Book Marketplace API")
+# Initialize FastAPI app
+app = FastAPI()
 
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite's default port
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Security configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-for-development")
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+# Web3 configuration
+w3 = Web3(Web3.HTTPProvider(os.getenv('WEB3_PROVIDER_URI')))
 
-# Database dependency
+# Load contract ABI and address
+contract_path = Path(__file__).parent / "contracts" / "BookMarketplace.json"
+with open(contract_path) as f:
+    contract_json = json.load(f)
+    CONTRACT_ABI = contract_json['abi']
+
+CONTRACT_ADDRESS = os.getenv('CONTRACT_ADDRESS')
+contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=CONTRACT_ABI)
+
+# Database configuration
+from database import SessionLocal, engine
+models.Base.metadata.create_all(bind=engine)
+
 def get_db():
-    db = database.SessionLocal()
+    db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-# Authentication functions
-def create_access_token(data: dict):
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
+# Blockchain helper functions
+def get_nonce(address):
+    return w3.eth.get_transaction_count(address)
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        wallet_address: str = payload.get("wallet")
-        if wallet_address is None:
-            raise credentials_exception
-    except jwt.JWTError:
-        raise credentials_exception
+def send_transaction(transaction, private_key):
+    signed_txn = w3.eth.account.sign_transaction(transaction, private_key)
+    tx_hash = w3.eth.send_raw_transaction(signed_txn.rawTransaction)
+    tx_receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+    return tx_receipt
 
-    user = db.query(models.User).filter(models.User.wallet_address == wallet_address).first()
-    if user is None:
-        raise credentials_exception
-    return user
+# API Routes
 
-# Authentication endpoints
-@app.post("/auth/verify", response_model=schemas.Token)
-async def verify_wallet(auth_data: schemas.WalletAuth, db: Session = Depends(get_db)):
-    # Create message for signature verification
-    message = encode_defunct(text=f"Login to Book Marketplace: {auth_data.nonce}")
-    w3 = Web3()
-    
-    try:
-        # Recover address from signature
-        recovered_address = w3.eth.account.recover_message(message, signature=auth_data.signature)
-        if recovered_address.lower() != auth_data.wallet_address.lower():
-            raise HTTPException(status_code=401, detail="Invalid signature")
-    except Exception as e:
-        raise HTTPException(status_code=401, detail="Invalid signature")
-
-    # Get or create user
-    user = db.query(models.User).filter(models.User.wallet_address == recovered_address).first()
-    if not user:
-        user = models.User(
-            wallet_address=recovered_address,
-            role=models.UserRole.USER
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-    # Create access token
-    access_token = create_access_token(
-        data={"wallet": recovered_address, "role": user.role}
-    )
-    return {"access_token": access_token, "token_type": "bearer", "role": user.role}
-
-# Book endpoints
-@app.post("/books", response_model=schemas.Book)
-async def create_book(
-    book: schemas.BookCreate,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    if current_user.role not in [models.UserRole.AUTHOR, models.UserRole.SELLER]:
-        raise HTTPException(
-            status_code=403,
-            detail="Only authors and sellers can create books"
-        )
-    
-    db_book = models.Book(**book.model_dump())
-    db.add(db_book)
-    db.commit()
-    db.refresh(db_book)
-    return db_book
-
-@app.get("/books", response_model=schemas.BookListResponse)
-async def list_books(
-    skip: int = 0,
-    limit: int = 10,
-    db: Session = Depends(get_db)
-):
-    books = db.query(models.Book).filter(
-        models.Book.status == 'active'
-    ).offset(skip).limit(limit).all()
-    
-    total = db.query(models.Book).filter(
-        models.Book.status == 'active'
-    ).count()
-    
+@app.get("/health")
+async def health_check():
     return {
-        "books": books,
-        "total": total,
-        "page": skip // limit + 1,
-        "size": limit
+        "status": "healthy",
+        "blockchain_connected": w3.is_connected(),
+        "current_block": w3.eth.block_number
     }
 
-@app.get("/books/{book_id}", response_model=schemas.Book)
-async def get_book(
-    book_id: int,
+@app.post("/register")
+async def register(
+    username: str = Form(...),
+    email: str = Form(...),
+    password: str = Form(...),
+    role: str = Form(...),
     db: Session = Depends(get_db)
 ):
+    if role not in ["AUTHOR", "SELLER", "USER"]:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    
+    if db.query(models.User).filter(models.User.username == username).first():
+        raise HTTPException(status_code=400, detail="Username already registered")
+    
+    # Create Ethereum account for user
+    account = Account.create()
+    
+    user = models.User(
+        username=username,
+        email=email,
+        role=role,
+        ethereum_address=account.address,
+        ethereum_private_key=account.key.hex()  # In production, encrypt this!
+    )
+    user.set_password(password)
+    
+    db.add(user)
+    db.commit()
+    
+    return {
+        "message": "Registration successful",
+        "ethereum_address": account.address
+    }
+
+@app.post("/login")
+async def login(
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user or not user.verify_password(password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    access_token = auth.create_access_token(
+        data={"sub": user.username, "role": user.role}
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "role": user.role,
+        "username": user.username,
+        "ethereum_address": user.ethereum_address
+    }
+
+@app.post("/author/upload-book")
+async def upload_book(
+    title: str = Form(...),
+    description: str = Form(...),
+    price: float = Form(...),
+    book_file: UploadFile = File(...),
+    cover_file: Optional[UploadFile] = File(None),
+    token: dict = Depends(auth.verify_token),
+    db: Session = Depends(get_db)
+):
+    if token["role"] != "AUTHOR":
+        raise HTTPException(status_code=403, detail="Author access required")
+    
+    user = db.query(models.User).filter(models.User.username == token["sub"]).first()
+    
+    try:
+        # Upload to IPFS
+        book_hash = await ipfs_handler.upload_file(book_file)
+        cover_hash = None
+        if cover_file:
+            cover_hash = await ipfs_handler.upload_file(cover_file)
+        
+        # Create blockchain transaction
+        nonce = get_nonce(user.ethereum_address)
+        
+        transaction = contract.functions.addBook(
+            title,
+            book_hash,
+            w3.to_wei(price, 'ether')
+        ).build_transaction({
+            'chainId': int(os.getenv('CHAIN_ID')),
+            'gas': int(os.getenv('GAS_LIMIT')),
+            'gasPrice': w3.eth.gas_price,
+            'nonce': nonce,
+        })
+        
+        # Send transaction
+        tx_receipt = send_transaction(transaction, user.ethereum_private_key)
+        
+        # Create database record
+        book = models.Book(
+            title=title,
+            description=description,
+            ipfs_hash=book_hash,
+            cover_ipfs_hash=cover_hash,
+            price=price,
+            author_id=user.id,
+            contract_address=CONTRACT_ADDRESS,
+            transaction_hash=tx_receipt['transactionHash'].hex()
+        )
+        
+        db.add(book)
+        db.commit()
+        
+        return {
+            "message": "Book uploaded successfully",
+            "book_id": book.id,
+            "transaction_hash": tx_receipt['transactionHash'].hex()
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/purchase-book/{book_id}")
+async def purchase_book(
+    book_id: int,
+    token: dict = Depends(auth.verify_token),
+    db: Session = Depends(get_db)
+):
+    user = db.query(models.User).filter(models.User.username == token["sub"]).first()
     book = db.query(models.Book).filter(models.Book.id == book_id).first()
+    
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
-    return book
+    
+    try:
+        nonce = get_nonce(user.ethereum_address)
+        
+        transaction = contract.functions.purchaseBook(
+            book_id
+        ).build_transaction({
+            'chainId': int(os.getenv('CHAIN_ID')),
+            'gas': int(os.getenv('GAS_LIMIT')),
+            'gasPrice': w3.eth.gas_price,
+            'nonce': nonce,
+            'value': w3.to_wei(book.price, 'ether')
+        })
+        
+        tx_receipt = send_transaction(transaction, user.ethereum_private_key)
+        
+        purchase = models.Purchase(
+            book_id=book.id,
+            buyer_id=user.id,
+            price=book.price,
+            transaction_hash=tx_receipt['transactionHash'].hex()
+        )
+        
+        db.add(purchase)
+        db.commit()
+        
+        return {
+            "message": "Book purchased successfully",
+            "transaction_hash": tx_receipt['transactionHash'].hex()
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.patch("/books/{book_id}", response_model=schemas.Book)
-async def update_book(
-    book_id: int,
-    book_update: schemas.BookUpdate,
-    current_user: models.User = Depends(get_current_user),
+@app.get("/user/books")
+async def get_user_books(
+    token: dict = Depends(auth.verify_token),
     db: Session = Depends(get_db)
 ):
-    db_book = db.query(models.Book).filter(models.Book.id == book_id).first()
-    if not db_book:
-        raise HTTPException(status_code=404, detail="Book not found")
+    user = db.query(models.User).filter(models.User.username == token["sub"]).first()
     
-    if db_book.author_address != current_user.wallet_address:
-        raise HTTPException(status_code=403, detail="Not authorized to update this book")
+    if token["role"] == "AUTHOR":
+        books = db.query(models.Book).filter(models.Book.author_id == user.id).all()
+    else:
+        purchases = db.query(models.Purchase).filter(models.Purchase.buyer_id == user.id).all()
+        books = [purchase.book for purchase in purchases]
     
-    for field, value in book_update.model_dump(exclude_unset=True).items():
-        setattr(db_book, field, value)
-    
-    db.commit()
-    db.refresh(db_book)
-    return db_book
-
-# Purchase endpoints
-@app.post("/purchases", response_model=schemas.Purchase)
-async def create_purchase(
-    purchase: schemas.PurchaseCreate,
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # Verify book exists and is active
-    book = db.query(models.Book).filter(models.Book.id == purchase.book_id).first()
-    if not book or book.status != 'active':
-        raise HTTPException(status_code=404, detail="Book not found or not available")
-    
-    # Create purchase record
-    db_purchase = models.Purchase(**purchase.model_dump())
-    db.add(db_purchase)
-    db.commit()
-    db.refresh(db_purchase)
-    return db_purchase
-
-@app.get("/users/me/stats", response_model=schemas.UserStats)
-async def get_user_stats(
-    current_user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # Get total books published
-    total_books = db.query(models.Book).filter(
-        models.Book.author_address == current_user.wallet_address
-    ).count()
-    
-    # Get total sales amount
-    total_sales = db.query(func.sum(models.Purchase.purchase_price)).join(models.Book).filter(
-        models.Book.author_address == current_user.wallet_address
-    ).scalar() or 0.0
-    
-    # Get total purchases amount
-    total_purchases = db.query(func.sum(models.Purchase.purchase_price)).filter(
-        models.Purchase.buyer_address == current_user.wallet_address
-    ).scalar() or 0.0
-    
-    return {
-        "total_books": total_books,
-        "total_sales": float(total_sales),
-        "total_purchases": float(total_purchases)
-    }
-
-# Error handlers
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    return {"detail": exc.detail}
+    return books
 
 if __name__ == "__main__":
     import uvicorn

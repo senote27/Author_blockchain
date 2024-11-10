@@ -1,0 +1,243 @@
+/* Reset default styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+  
+  /* Base styles for the entire app */
+  :root {
+    --primary-color: #3182ce;   /* Blue for main actions */
+    --secondary-color: #4a5568; /* Gray for secondary elements */
+    --success-color: #38a169;   /* Green for success states */
+    --error-color: #e53e3e;     /* Red for errors */
+    --background-color: #f7fafc; /* Light gray background */
+    --text-color: #2d3748;      /* Dark gray for text */
+  }
+  
+  /* Main app container */
+  .app {
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: var(--background-color);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen,
+      Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+  }
+  
+  /* Login form styles */
+  .login-container {
+    background: white;
+    padding: 2rem;
+    border-radius: 10px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 400px;
+    margin: 1rem;
+  }
+  
+  .login-title {
+    text-align: center;
+    color: var(--text-color);
+    margin-bottom: 1.5rem;
+    font-size: 1.8rem;
+    font-weight: 600;
+  }
+  
+  /* Input fields */
+  .input-field {
+    width: 100%;
+    padding: 0.75rem;
+    margin: 0.5rem 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 5px;
+    font-size: 1rem;
+    transition: border-color 0.2s;
+  }
+  
+  .input-field:focus {
+    outline: none;
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 3px rgba(49, 130, 206, 0.1);
+  }
+  
+  /* Buttons */
+  .button {
+    width: 100%;
+    padding: 0.75rem;
+    border: none;
+    border-radius: 5px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.1s, background-color 0.2s;
+  }
+  
+  .button:active {
+    transform: scale(0.98);
+  }
+  
+  .button-primary {
+    background-color: var(--primary-color);
+    color: white;
+  }
+  
+  .button-primary:hover {
+    background-color: #2b6cb0;
+  }
+  
+  /* Role selection buttons */
+  .role-buttons {
+    display: flex;
+    gap: 0.5rem;
+    margin: 1rem 0;
+  }
+  
+  .role-button {
+    flex: 1;
+    padding: 0.5rem;
+    border: 2px solid var(--primary-color);
+    border-radius: 5px;
+    background: white;
+    color: var(--primary-color);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  
+  .role-button.active {
+    background: var(--primary-color);
+    color: white;
+  }
+  
+  /* Dashboard styles */
+  .dashboard {
+    width: 100%;
+    max-width: 1200px;
+    margin: 2rem auto;
+    padding: 1rem;
+  }
+  
+  .dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid #e2e8f0;
+  }
+  
+  /* Card styles for books and items */
+  .card {
+    background: white;
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1rem 0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    transition: transform 0.2s;
+  }
+  
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  }
+  
+  /* Grid layout for books/items */
+  .grid-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 1rem;
+    padding: 1rem 0;
+  }
+  
+  /* Responsive design */
+  @media (max-width: 768px) {
+    .login-container {
+      margin: 1rem;
+      padding: 1.5rem;
+    }
+  
+    .role-buttons {
+      flex-direction: column;
+    }
+  
+    .role-button {
+      width: 100%;
+      margin: 0.25rem 0;
+    }
+  
+    .dashboard {
+      padding: 0.5rem;
+    }
+  
+    .grid-container {
+      grid-template-columns: 1fr;
+    }
+  }
+  
+  /* Animations */
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  
+  .fade-in {
+    animation: fadeIn 0.3s ease-in-out;
+  }
+  
+  /* Loading states */
+  .loading {
+    opacity: 0.7;
+    pointer-events: none;
+  }
+  
+  /* Error states */
+  .error {
+    color: var(--error-color);
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+  }
+  
+  /* Success states */
+  .success {
+    color: var(--success-color);
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+  }
+  
+  /* Utility classes */
+  .text-center { text-align: center; }
+  .mt-1 { margin-top: 1rem; }
+  .mb-1 { margin-bottom: 1rem; }
+  .p-1 { padding: 1rem; }
+  
+  /* Status badges */
+  .badge {
+    display: inline-block;
+    padding: 0.25rem 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+  }
+  
+  .badge-success {
+    background-color: #c6f6d5;
+    color: #2f855a;
+  }
+  
+  .badge-pending {
+    background-color: #fefcbf;
+    color: #975a16;
+  }
+  
+  .badge-error {
+    background-color: #fed7d7;
+    color: #c53030;
+  }

@@ -1,0 +1,27 @@
+{
+    "name": "book-marketplace",
+    "private": true,
+    "version": "0.0.1",
+    "type": "module",
+    "scripts": {
+      "dev": "vite",
+      "build": "vite build",
+      "preview": "vite preview"
+    },
+    "dependencies": {
+      "@chakra-ui/react": "^2.8.0",
+      "@emotion/react": "^11.11.1",
+      "@emotion/styled": "^11.11.0",
+      "axios": "^1.4.0",
+      "ethers": "^6.7.0",
+      "framer-motion": "^10.15.1",
+      "react": "^18.2.0",
+      "react-dom": "^18.2.0"
+    },
+    "devDependencies": {
+      "@types/react": "^18.2.15",
+      "@types/react-dom": "^18.2.7",
+      "@vitejs/plugin-react": "^4.0.3",
+      "vite": "^4.4.5"
+    }
+  }

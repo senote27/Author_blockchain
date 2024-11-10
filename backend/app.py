@@ -61,7 +61,6 @@ def send_transaction(transaction, private_key):
     return tx_receipt
 
 # API Routes
-
 @app.get("/health")
 async def health_check():
     return {
@@ -98,6 +97,7 @@ async def register(
     
     db.add(user)
     db.commit()
+    db.refresh(user)
     
     return {
         "message": "Registration successful",
@@ -115,7 +115,7 @@ async def login(
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
     access_token = auth.create_access_token(
-        data={"sub": user.username, "role": user.role}
+        data={"sub": user.username, "role": user.role, "user_id": user.id}
     )
     
     return {
@@ -136,119 +136,141 @@ async def upload_book(
     token: dict = Depends(auth.verify_token),
     db: Session = Depends(get_db)
 ):
-    if token["role"] != "AUTHOR":
-        raise HTTPException(status_code=403, detail="Author access required")
-    
+    # Verify user is an author
     user = db.query(models.User).filter(models.User.username == token["sub"]).first()
+    if user.role != "AUTHOR":
+        raise HTTPException(status_code=403, detail="Only authors can upload books")
     
     try:
-        # Upload to IPFS
-        book_hash = await ipfs_handler.upload_file(book_file)
+        # Upload files to IPFS
+        book_hash = await ipfs.upload_file(book_file)
         cover_hash = None
         if cover_file:
-            cover_hash = await ipfs_handler.upload_file(cover_file)
+            cover_hash = await ipfs.upload_file(cover_file)
         
-        # Create blockchain transaction
+        # Create book in blockchain
         nonce = get_nonce(user.ethereum_address)
-        
-        transaction = contract.functions.addBook(
+        transaction = contract.functions.createBook(
             title,
+            description,
+            Web3.to_wei(price, 'ether'),
             book_hash,
-            w3.to_wei(price, 'ether')
+            cover_hash or ""
         ).build_transaction({
-            'chainId': int(os.getenv('CHAIN_ID')),
-            'gas': int(os.getenv('GAS_LIMIT')),
-            'gasPrice': w3.eth.gas_price,
+            'from': user.ethereum_address,
             'nonce': nonce,
+            'gas': 2000000
         })
         
         # Send transaction
-        tx_receipt = send_transaction(transaction, user.ethereum_private_key)
+        receipt = send_transaction(transaction, user.ethereum_private_key)
         
-        # Create database record
+        # Get book ID from event logs
+        book_created_event = contract.events.BookCreated().process_receipt(receipt)[0]
+        contract_book_id = book_created_event['args']['bookId']
+        
+        # Save to database
         book = models.Book(
             title=title,
             description=description,
-            ipfs_hash=book_hash,
-            cover_ipfs_hash=cover_hash,
             price=price,
+            book_hash=book_hash,
+            cover_hash=cover_hash,
             author_id=user.id,
-            contract_address=CONTRACT_ADDRESS,
-            transaction_hash=tx_receipt['transactionHash'].hex()
+            contract_id=contract_book_id
         )
         
         db.add(book)
         db.commit()
+        db.refresh(book)
         
         return {
             "message": "Book uploaded successfully",
             "book_id": book.id,
-            "transaction_hash": tx_receipt['transactionHash'].hex()
+            "contract_id": book.contract_id,
+            "ipfs_hash": book_hash
         }
-        
     except Exception as e:
-        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/purchase-book/{book_id}")
-async def purchase_book(
+@app.get("/books")
+async def get_books(
+    skip: int = 0,
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+    books = db.query(models.Book).offset(skip).limit(limit).all()
+    return books
+
+@app.get("/books/{book_id}")
+async def get_book(
     book_id: int,
+    db: Session = Depends(get_db)
+):
+    book = db.query(models.Book).filter(models.Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return book
+
+@app.post("/purchase/verify")
+async def verify_purchase(
+    book_id: int,
+    transaction_hash: str,
     token: dict = Depends(auth.verify_token),
     db: Session = Depends(get_db)
 ):
-    user = db.query(models.User).filter(models.User.username == token["sub"]).first()
-    book = db.query(models.Book).filter(models.Book.id == book_id).first()
-    
-    if not book:
-        raise HTTPException(status_code=404, detail="Book not found")
-    
     try:
-        nonce = get_nonce(user.ethereum_address)
+        # Verify transaction
+        receipt = w3.eth.get_transaction_receipt(transaction_hash)
+        if not receipt or not receipt['status']:
+            raise HTTPException(status_code=400, detail="Invalid transaction")
         
-        transaction = contract.functions.purchaseBook(
-            book_id
-        ).build_transaction({
-            'chainId': int(os.getenv('CHAIN_ID')),
-            'gas': int(os.getenv('GAS_LIMIT')),
-            'gasPrice': w3.eth.gas_price,
-            'nonce': nonce,
-            'value': w3.to_wei(book.price, 'ether')
-        })
+        # Verify the book exists
+        book = db.query(models.Book).filter(models.Book.id == book_id).first()
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
         
-        tx_receipt = send_transaction(transaction, user.ethereum_private_key)
-        
+        # Create purchase record
         purchase = models.Purchase(
-            book_id=book.id,
-            buyer_id=user.id,
-            price=book.price,
-            transaction_hash=tx_receipt['transactionHash'].hex()
+            book_id=book_id,
+            buyer_id=token["user_id"],
+            transaction_hash=transaction_hash,
+            purchase_price=book.price,
+            status="COMPLETED"
         )
         
         db.add(purchase)
         db.commit()
+        db.refresh(purchase)
         
         return {
-            "message": "Book purchased successfully",
-            "transaction_hash": tx_receipt['transactionHash'].hex()
+            "message": "Purchase verified successfully",
+            "purchase_id": purchase.id,
+            "book_hash": book.book_hash
         }
-        
     except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/user/books")
-async def get_user_books(
+@app.get("/purchases")
+async def get_purchases(
+    token: dict = Depends(auth.verify_token),
+    db: Session = Depends(get_db)
+):
+    purchases = db.query(models.Purchase).filter(
+        models.Purchase.buyer_id == token["user_id"]
+    ).all()
+    return purchases
+
+@app.get("/author/books")
+async def get_author_books(
     token: dict = Depends(auth.verify_token),
     db: Session = Depends(get_db)
 ):
     user = db.query(models.User).filter(models.User.username == token["sub"]).first()
+    if user.role != "AUTHOR":
+        raise HTTPException(status_code=403, detail="Only authors can access this endpoint")
     
-    if token["role"] == "AUTHOR":
-        books = db.query(models.Book).filter(models.Book.author_id == user.id).all()
-    else:
-        purchases = db.query(models.Purchase).filter(models.Purchase.buyer_id == user.id).all()
-        books = [purchase.book for purchase in purchases]
-    
+    books = db.query(models.Book).filter(models.Book.author_id == user.id).all()
     return books
 
 if __name__ == "__main__":
